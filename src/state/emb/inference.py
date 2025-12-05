@@ -10,12 +10,19 @@ from tqdm import tqdm
 from torch import nn
 
 from .nn.model import StateEmbeddingModel
-from omegaconf import OmegaConf
+from omegaconf import OmegaConf, DictConfig
 from .train.trainer import get_embeddings
 from .data import create_dataloader
 from .utils import get_embedding_cfg, get_precision_config
 
 log = logging.getLogger(__name__)
+
+# Monkey patch torch.load to force weights_only=False for PyTorch 2.6+ compatibility
+_original_torch_load = torch.load
+def _patched_torch_load(*args, **kwargs):
+    kwargs['weights_only'] = False
+    return _original_torch_load(*args, **kwargs)
+torch.load = _patched_torch_load
 
 
 class Inference:

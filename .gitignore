@@ -13,3 +13,5 @@ notebooks/
 temp
 wandb/
 CLAUDE.md
+*.h5ad
+models/
