@@ -197,6 +197,18 @@ class StateTransitionPerturbationModel(PerturbationModel):
             )
             self.batch_dim = batch_dim
 
+        # Add an optional encoder for timepoint variable
+        self.timepoint_encoder = None
+        self.timepoint_dim = None
+        if kwargs.get("use_timepoint_embedding", False):
+            num_timepoints = kwargs.get("num_timepoints", 3)  # Default: day10, day14, day19
+            self.timepoint_encoder = nn.Embedding(
+                num_embeddings=num_timepoints,
+                embedding_dim=hidden_dim,
+            )
+            self.timepoint_dim = num_timepoints
+            logger.info(f"Added timepoint embedding: {num_timepoints} timepoints × {hidden_dim} dim")
+
         # if the model is outputting to counts space, apply relu
         # otherwise its in embedding space and we don't want to
         is_gene_space = kwargs["embed_key"] == "X_hvg" or kwargs["embed_key"] is None
@@ -415,6 +427,25 @@ class StateTransitionPerturbationModel(PerturbationModel):
             # Get batch embeddings and add to sequence input
             batch_embeddings = self.batch_encoder(batch_indices.long())  # Shape: [B, S, hidden_dim]
             seq_input = seq_input + batch_embeddings
+
+        if self.timepoint_encoder is not None:
+            # Extract timepoint indices (assume they are integers: 0=day10, 1=day14, 2=day19)
+            timepoint_indices = batch.get("timepoint_ids")
+
+            if timepoint_indices is not None:
+                # Handle one-hot encoded timepoint indices
+                if timepoint_indices.dim() > 1 and timepoint_indices.size(-1) == self.timepoint_dim:
+                    timepoint_indices = timepoint_indices.argmax(-1)
+
+                # Reshape timepoint indices to match sequence structure
+                if padded:
+                    timepoint_indices = timepoint_indices.reshape(-1, self.cell_sentence_len)
+                else:
+                    timepoint_indices = timepoint_indices.reshape(1, -1)
+
+                # Get timepoint embeddings and add to sequence input
+                timepoint_embeddings = self.timepoint_encoder(timepoint_indices.long())  # Shape: [B, S, hidden_dim]
+                seq_input = seq_input + timepoint_embeddings
 
         if self.use_batch_token and self.batch_token is not None:
             batch_size, _, _ = seq_input.shape

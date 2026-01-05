@@ -238,8 +238,8 @@ class LoRACovariateStateModel(L.LightningModule):
         super().__init__()
 
         self.save_hyperparameters()
-        self.learning_rate = learning_rate
-        self.warmup_steps = warmup_steps
+        self.learning_rate = float(learning_rate)
+        self.warmup_steps = int(warmup_steps)
 
         # Load config from YAML file
         print(f"Loading config from {base_config_path}")
@@ -342,8 +342,9 @@ class LoRACovariateStateModel(L.LightningModule):
             covariate_embedding: (batch_size, output_dim) covariate embedding
         """
         # Get base embedding with LoRA adapters active (gradients enabled!)
+        # Note: Not passing counts to avoid dimension mismatch with dataset_correction
         gene_output_base, embedding_base, dataset_emb = self.base_model(
-            src, mask, counts=counts, dataset_nums=dataset_nums
+            src, mask, counts=None, dataset_nums=None
         )
 
         # Get covariate embedding
@@ -368,41 +369,57 @@ class LoRACovariateStateModel(L.LightningModule):
             batch["cell_sentences"],
             batch["mask"],
             batch["covariates"],
-            batch.get("counts"),
-            batch.get("dataset_nums")
+            counts=batch.get("counts"),
+            dataset_nums=None  # Not using dataset IDs
         )
 
-        # Prepare task: predict gene presence/absence from embedding
-        X = self.base_model.gene_embedding_layer(batch["cell_sentences"])  # Gene embeddings
-        Y = (batch["counts"] > 0).float()  # Binary: 1 if gene expressed, 0 otherwise
+        # Get gene embeddings from encoder
+        # batch["cell_sentences"]: (B, seq_len, 5120) ESM2 embeddings
+        X = self.base_model.gene_embedding_layer(batch["cell_sentences"])  # (B, seq_len, 2048)
+
+        # Target: binary gene presence (1 if gene expressed, 0 otherwise)
+        Y = (batch["counts"] > 0).float()  # (B, seq_len)
 
         # Expand conditioned embedding to match sequence length
-        z = conditioned_embedding.unsqueeze(1).repeat(1, X.shape[1], 1)
+        z = conditioned_embedding.unsqueeze(1).repeat(1, X.shape[1], 1)  # (B, seq_len, 2048)
 
-        # Optionally add RDA (relative dataset abundance) if using counts
+        # Concatenate gene embeddings + conditioned embedding
+        combine = torch.cat([X, z], dim=2)  # (B, seq_len, 4096)
+
+        # Add RDA (relative dataset abundance) if enabled
         if self.base_cfg.model.rda and batch.get("counts") is not None:
             mu = torch.nanmean(
                 batch["counts"].float().masked_fill(batch["counts"] == 0, float("nan")),
-                dim=1, keepdim=True
+                dim=1
             )
             mu = torch.nan_to_num(mu, nan=0.0)
-            mu_expanded = mu.unsqueeze(2).repeat(1, X.shape[1], 1)
-            combine = torch.cat([X, z, mu_expanded], dim=2)
-        else:
-            combine = torch.cat([X, z], dim=2)
+            mu_expanded = mu.unsqueeze(1).unsqueeze(2).repeat(1, X.shape[1], 1)  # (B, seq_len, 1)
+            combine = torch.cat([combine, mu_expanded], dim=2)  # (B, seq_len, 4097)
+
+        # Add dataset embedding if enabled (10-dim)
+        # Since we're not using dataset_nums, create zero embeddings
+        if self.base_cfg.model.get("dataset_correction", False):
+            ds_emb_zero = torch.zeros(
+                combine.shape[0], combine.shape[1], 10,
+                device=combine.device, dtype=combine.dtype
+            )
+            combine = torch.cat([combine, ds_emb_zero], dim=2)  # (B, seq_len, 4107)
 
         # Forward through binary decoder
         predictions = self.base_model.binary_decoder(combine)  # (B, seq_len, 1)
 
         # Binary cross-entropy loss
         loss = F.binary_cross_entropy_with_logits(
-            predictions.squeeze(-1),
+            predictions.squeeze(-1),  # (B, seq_len)
             Y,
             reduction='mean'
         )
 
-        self.log("train/loss", loss, prog_bar=True)
-        self.log("train/accuracy", ((predictions.squeeze(-1) > 0) == Y).float().mean())
+        # Compute accuracy
+        accuracy = ((predictions.squeeze(-1) > 0) == Y).float().mean()
+
+        self.log("train/loss", loss, prog_bar=True, sync_dist=True)
+        self.log("train/accuracy", accuracy, prog_bar=True, sync_dist=True)
 
         return loss
 
@@ -413,28 +430,37 @@ class LoRACovariateStateModel(L.LightningModule):
             batch["cell_sentences"],
             batch["mask"],
             batch["covariates"],
-            batch.get("counts"),
-            batch.get("dataset_nums")
+            counts=batch.get("counts"),
+            dataset_nums=None
         )
 
-        # Prepare task: predict gene presence/absence from embedding
+        # Get gene embeddings
         X = self.base_model.gene_embedding_layer(batch["cell_sentences"])
         Y = (batch["counts"] > 0).float()
 
-        # Expand conditioned embedding to match sequence length
+        # Expand conditioned embedding
         z = conditioned_embedding.unsqueeze(1).repeat(1, X.shape[1], 1)
 
-        # Optionally add RDA if using counts
+        # Concatenate
+        combine = torch.cat([X, z], dim=2)
+
+        # Add RDA if enabled
         if self.base_cfg.model.rda and batch.get("counts") is not None:
             mu = torch.nanmean(
                 batch["counts"].float().masked_fill(batch["counts"] == 0, float("nan")),
-                dim=1, keepdim=True
+                dim=1
             )
             mu = torch.nan_to_num(mu, nan=0.0)
-            mu_expanded = mu.unsqueeze(2).repeat(1, X.shape[1], 1)
-            combine = torch.cat([X, z, mu_expanded], dim=2)
-        else:
-            combine = torch.cat([X, z], dim=2)
+            mu_expanded = mu.unsqueeze(1).unsqueeze(2).repeat(1, X.shape[1], 1)
+            combine = torch.cat([combine, mu_expanded], dim=2)
+
+        # Add dataset embedding placeholder
+        if self.base_cfg.model.get("dataset_correction", False):
+            ds_emb_zero = torch.zeros(
+                combine.shape[0], combine.shape[1], 10,
+                device=combine.device, dtype=combine.dtype
+            )
+            combine = torch.cat([combine, ds_emb_zero], dim=2)
 
         # Forward through binary decoder
         predictions = self.base_model.binary_decoder(combine)
@@ -446,8 +472,12 @@ class LoRACovariateStateModel(L.LightningModule):
             reduction='mean'
         )
 
-        self.log("val/loss", loss, prog_bar=True)
-        self.log("val/accuracy", ((predictions.squeeze(-1) > 0) == Y).float().mean())
+        # Compute accuracy
+        accuracy = ((predictions.squeeze(-1) > 0) == Y).float().mean()
+
+        self.log("val/loss", loss, prog_bar=True, sync_dist=True)
+        self.log("val/accuracy", accuracy, prog_bar=True, sync_dist=True)
+        self.log("val_loss", loss, prog_bar=False, sync_dist=True)  # For ModelCheckpoint
 
         return loss
 

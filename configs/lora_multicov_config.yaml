@@ -7,7 +7,7 @@ base_config: /home/scumpia-mrl/Desktop/Sujit/Projects/state-experimentation/mode
 
 # Data configuration
 data:
-  h5ad_path: /home/scumpia-mrl/Desktop/Sujit/Projects/state-experimentation/burn_sham_data/burn_sham_processed.h5ad
+  h5ad_path: /home/scumpia-mrl/Desktop/Sujit/Projects/state-experimentation/burn_sham_processed.h5ad
   batch_size: 16
   num_workers: 8
   # Column names in h5ad file
@@ -64,11 +64,11 @@ training:
   learning_rate: 1e-4
   warmup_steps: 1000
   weight_decay: 0.01
-  devices: 2              # Use 2 GPUs
-  strategy: ddp           # Distributed Data Parallel
+  devices: 1              # Use 1 GPU (no NVLink)
+  strategy: auto          # Auto strategy for single GPU
   gradient_clip_val: 1.0
   accumulate_grad_batches: 4
-  val_check_interval: 500
+  val_check_interval: 1000  # Validate every 1000 steps (less frequent)
 
   # Logging
   log_every_n_steps: 50

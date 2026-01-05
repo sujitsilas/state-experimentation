@@ -18,6 +18,69 @@ import numpy as np
 from torch.utils.data import Dataset, DataLoader
 
 from src.state.emb.nn.lora_covariate_model import LoRACovariateStateModel
+from tqdm import tqdm
+
+
+def extract_embeddings(model, data_module, output_path, batch_size=16):
+    """
+    Extract covariate-conditioned embeddings for all cells and save to h5ad.
+
+    Args:
+        model: Trained LoRACovariateStateModel
+        data_module: Lightning data module with the dataset
+        output_path: Path to save the output h5ad file
+        batch_size: Batch size for inference
+    """
+    model.eval()
+    device = next(model.parameters()).device
+
+    # Get the full dataset (train + val combined)
+    full_dataset = data_module.train_dataset.dataset  # Get underlying dataset from Subset
+
+    # Create dataloader for full dataset
+    dataloader = DataLoader(
+        full_dataset,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=4,
+        collate_fn=full_dataset.collate_fn,
+    )
+
+    embeddings_list = []
+
+    print(f"Extracting embeddings for {len(full_dataset)} cells...")
+
+    with torch.no_grad():
+        for batch in tqdm(dataloader, desc="Extracting embeddings"):
+            # Move batch to device
+            batch = {k: v.to(device) if isinstance(v, torch.Tensor) else v
+                    for k, v in batch.items()}
+
+            # Forward pass to get conditioned embeddings
+            _, conditioned_embedding, _ = model(
+                batch["cell_sentences"],
+                batch["mask"],
+                batch["covariates"],
+                counts=batch.get("counts"),
+                dataset_nums=None,
+            )
+
+            # Move to CPU and store
+            embeddings_list.append(conditioned_embedding.cpu().numpy())
+
+    # Concatenate all embeddings
+    all_embeddings = np.concatenate(embeddings_list, axis=0)
+
+    print(f"Extracted embeddings shape: {all_embeddings.shape}")
+
+    # Load original AnnData and add embeddings
+    adata = data_module.adata.copy()
+    adata.obsm["X_lora_conditioned"] = all_embeddings
+
+    # Save to output path
+    print(f"Saving embeddings to {output_path}")
+    adata.write_h5ad(output_path)
+    print(f"✓ Saved {len(adata)} cells with conditioned embeddings to {output_path}")
 
 
 class CovariateAnnDataset(Dataset):
@@ -31,7 +94,7 @@ class CovariateAnnDataset(Dataset):
         adata: ad.AnnData,
         covariate_columns: list,
         protein_embeds: dict,
-        max_seq_len: int = 512,
+        max_seq_len: int = 513,  # SE-600M: 513 positions (pos 0 will be CLS, dataset token added by model)
         cell_type_col: str = None,
     ):
         self.adata = adata
@@ -148,16 +211,28 @@ class LoRADataModule(L.LightningDataModule):
         print(f"✓ Loaded {len(self.protein_embeds)} gene embeddings")
 
         # Create dataset with protein embeddings
-        self.train_dataset = CovariateAnnDataset(
+        # Note: SE-600M expects 513 input tokens (dataset token added by model's forward())
+        full_dataset = CovariateAnnDataset(
             self.adata,
             covariate_columns=self.config["data"]["covariate_columns"],
             protein_embeds=self.protein_embeds,
-            max_seq_len=512,
+            max_seq_len=513,  # 513 tokens (position 0 for CLS, dataset token added in forward())
             cell_type_col=self.config["data"].get("cell_type_col"),
         )
 
-        # Use same dataset for validation (TODO: implement proper split)
-        self.val_dataset = self.train_dataset
+        # Split into train/val (90/10 split for faster validation)
+        from torch.utils.data import random_split
+
+        train_size = int(0.9 * len(full_dataset))
+        val_size = len(full_dataset) - train_size
+
+        self.train_dataset, self.val_dataset = random_split(
+            full_dataset,
+            [train_size, val_size],
+            generator=torch.Generator().manual_seed(42)  # Reproducible split
+        )
+
+        print(f"Train set: {len(self.train_dataset)} cells | Val set: {len(self.val_dataset)} cells")
 
     def train_dataloader(self):
         return DataLoader(
@@ -259,8 +334,12 @@ def main():
     # Extract embeddings if configured
     if config["output"].get("save_embeddings", False):
         print("\nExtracting covariate-conditioned embeddings...")
-        # TODO: Implement embedding extraction
-        print("Embedding extraction not yet implemented")
+        extract_embeddings(
+            model=model,
+            data_module=data_module,
+            output_path=config["output"]["embeddings_output"],
+            batch_size=config["data"]["batch_size"],
+        )
 
 
 if __name__ == "__main__":

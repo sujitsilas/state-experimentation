@@ -172,8 +172,29 @@ class scGPTPerturbationDataset(PerturbationDataset):
         else:
             batch = None
 
+        # Get timepoint information (if available in the h5 file)
+        timepoint_id = None
+        if "obs/timepoint" in self.h5_file:
+            try:
+                timepoint_data = self.h5_file["obs/timepoint"]
+                if hasattr(timepoint_data, 'categories'):  # Categorical data
+                    timepoint_code = timepoint_data['codes'][underlying_idx]
+                    timepoint_name = timepoint_data['categories'][timepoint_code].decode() if isinstance(timepoint_data['categories'][timepoint_code], bytes) else str(timepoint_data['categories'][timepoint_code])
+                else:  # Direct string array
+                    timepoint_name = timepoint_data[underlying_idx]
+                    if isinstance(timepoint_name, bytes):
+                        timepoint_name = timepoint_name.decode()
+                    else:
+                        timepoint_name = str(timepoint_name)
+
+                # Map timepoint to integer ID (day10=0, day14=1, day19=2)
+                timepoint_map = {"day10": 0, "day14": 1, "day19": 2}
+                timepoint_id = timepoint_map.get(timepoint_name, 0)
+            except Exception as e:
+                logger.warning(f"Could not read timepoint for idx {underlying_idx}: {e}")
+
         sample = {
-            "pert_cell_emb": pert_expr,  # the perturbed cell’s data
+            "pert_cell_emb": pert_expr,  # the perturbed cell's data
             "ctrl_cell_emb": ctrl_expr,  # will be filled in by the mapping strategy
             "pert_emb": pert_onehot,
             "pert_name": pert_name,
@@ -185,6 +206,10 @@ class scGPTPerturbationDataset(PerturbationDataset):
                 self.gene_ids, dtype=torch.long
             ),  # TODO: should be a more efficient way to do this as this is repeated for every cell
         }
+
+        # Add timepoint_ids if available
+        if timepoint_id is not None:
+            sample["timepoint_ids"] = timepoint_id
 
         if "perturbation_type" in self.__dict__ and self.perturbation_type == "genetic":
             sample["pert_flags"] = torch.tensor(self.pert_flags[pert_name], dtype=torch.long)
