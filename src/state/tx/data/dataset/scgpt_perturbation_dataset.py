@@ -108,6 +108,16 @@ class scGPTPerturbationDataset(PerturbationDataset):
         if num_invalid_genes > 0:
             logger.warning(f"scGPTPerturbationDataset ([{self.name}]) Number of invalid genes: {num_invalid_genes}")
 
+        # Validate velocity features exist (Phase 4 - Velocity Integration)
+        required_velocity_features = ['velocity_magnitude', 'velocity_pseudotime', 'velocity_confidence']
+        self.has_velocity = all(f"obs/{feature}" in self.h5_file for feature in required_velocity_features)
+        if self.has_velocity:
+            logger.info(f"scGPTPerturbationDataset ([{self.name}]) Found velocity features: {required_velocity_features}")
+        else:
+            missing = [f for f in required_velocity_features if f"obs/{f}" not in self.h5_file]
+            if missing:
+                logger.warning(f"scGPTPerturbationDataset ([{self.name}]) Missing velocity features: {missing}")
+
         self.perturbation_type = perturbation_type.lower()
 
         if self.perturbation_type == "genetic":
@@ -210,6 +220,19 @@ class scGPTPerturbationDataset(PerturbationDataset):
         # Add timepoint_ids if available
         if timepoint_id is not None:
             sample["timepoint_ids"] = timepoint_id
+
+        # Add velocity features if available (Phase 4 - Velocity Integration)
+        if self.has_velocity:
+            try:
+                velocity_mag = float(self.h5_file["obs/velocity_magnitude"][underlying_idx])
+                velocity_pseudo = float(self.h5_file["obs/velocity_pseudotime"][underlying_idx])
+                velocity_conf = float(self.h5_file["obs/velocity_confidence"][underlying_idx])
+
+                sample["velocity_magnitude"] = velocity_mag
+                sample["velocity_pseudotime"] = velocity_pseudo
+                sample["velocity_confidence"] = velocity_conf
+            except Exception as e:
+                logger.warning(f"Could not read velocity features for idx {underlying_idx}: {e}")
 
         if "perturbation_type" in self.__dict__ and self.perturbation_type == "genetic":
             sample["pert_flags"] = torch.tensor(self.pert_flags[pert_name], dtype=torch.long)

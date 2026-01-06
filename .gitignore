@@ -15,3 +15,6 @@ wandb/
 CLAUDE.md
 *.h5ad
 models/
+velocyto_loom/
+experiments/*/data/
+experiments/*/results/

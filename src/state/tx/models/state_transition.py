@@ -209,6 +209,33 @@ class StateTransitionPerturbationModel(PerturbationModel):
             self.timepoint_dim = num_timepoints
             logger.info(f"Added timepoint embedding: {num_timepoints} timepoints × {hidden_dim} dim")
 
+        # Velocity feature encoders (Phase 4 - Velocity Integration)
+        # Continuous scalar → hidden_dim embedding
+        self.use_velocity = kwargs.get("use_velocity_features", False)
+
+        if self.use_velocity:
+            self.velocity_mag_encoder = nn.Sequential(
+                nn.Linear(1, 128),
+                nn.SiLU(),
+                nn.Linear(128, hidden_dim)
+            )
+
+            self.velocity_pseudotime_encoder = nn.Sequential(
+                nn.Linear(1, 128),
+                nn.SiLU(),
+                nn.Linear(128, hidden_dim)
+            )
+
+            self.velocity_confidence_encoder = nn.Sequential(
+                nn.Linear(1, 128),
+                nn.SiLU(),
+                nn.Linear(128, hidden_dim)
+            )
+
+            # Learnable weight for velocity importance
+            self.velocity_weight = nn.Parameter(torch.tensor(0.3))
+            logger.info(f"Added velocity encoders: 3 features × {hidden_dim} dim (initial weight: 0.3)")
+
         # if the model is outputting to counts space, apply relu
         # otherwise its in embedding space and we don't want to
         is_gene_space = kwargs["embed_key"] == "X_hvg" or kwargs["embed_key"] is None
@@ -446,6 +473,30 @@ class StateTransitionPerturbationModel(PerturbationModel):
                 # Get timepoint embeddings and add to sequence input
                 timepoint_embeddings = self.timepoint_encoder(timepoint_indices.long())  # Shape: [B, S, hidden_dim]
                 seq_input = seq_input + timepoint_embeddings
+
+        # Add velocity embeddings if available (Phase 4 - Velocity Integration)
+        if self.use_velocity and "velocity_magnitude" in batch:
+            # Extract velocity scalars (batch_size,) → (batch_size, 1)
+            velocity_mag = batch["velocity_magnitude"].unsqueeze(-1).float()
+            velocity_pseudo = batch["velocity_pseudotime"].unsqueeze(-1).float()
+            velocity_conf = batch["velocity_confidence"].unsqueeze(-1).float()
+
+            # Encode to hidden_dim
+            velocity_mag_emb = self.velocity_mag_encoder(velocity_mag)  # Shape: [B, hidden_dim]
+            velocity_pseudo_emb = self.velocity_pseudotime_encoder(velocity_pseudo)
+            velocity_conf_emb = self.velocity_confidence_encoder(velocity_conf)
+
+            # Combine (average)
+            velocity_emb = (velocity_mag_emb + velocity_pseudo_emb + velocity_conf_emb) / 3  # Shape: [B, hidden_dim]
+
+            # Reshape to match sequence structure
+            if padded:
+                velocity_emb = velocity_emb.reshape(-1, self.cell_sentence_len, velocity_emb.size(-1))
+            else:
+                velocity_emb = velocity_emb.reshape(1, -1, velocity_emb.size(-1))
+
+            # Add to latent with learnable weight
+            seq_input = seq_input + self.velocity_weight * velocity_emb
 
         if self.use_batch_token and self.batch_token is not None:
             batch_size, _, _ = seq_input.shape
