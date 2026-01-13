@@ -1,0 +1,74 @@
+# LoRA + mHC Fine-Tuning Configuration for ST Model
+# Fine-tune ST-Tahoe with LoRA adapters AND mHC for gradient stabilization
+
+model:
+  name: "ST-LoRA-mHC"
+
+  # LoRA Configuration
+  lora:
+    enable: true
+    r: 16                        # LoRA rank
+    alpha: 32                    # LoRA scaling factor
+    dropout: 0.05                # LoRA dropout
+    target_modules:              # Which modules to adapt
+      - "c_attn"                 # Attention projections
+      - "c_proj"                 # Output projections
+    bias: "none"
+    task_type: "FEATURE_EXTRACTION"
+
+  # mHC Configuration (ENABLED for gradient stabilization)
+  use_mhc: true
+  mhc:
+    sinkhorn_iters: 10           # Sinkhorn-Knopp iterations
+    layer_indices: null          # null = apply to all layers
+
+  # Model architecture
+  input_dim: 2048                # SE-600M embedding dimension
+  output_dim: 2048
+  hidden_dim: 512
+  cell_set_len: 256
+
+  # Transformer backbone
+  transformer_backbone_key: "GPT2"
+  transformer_backbone_kwargs:
+    n_embd: 512
+    n_layer: 8
+    n_head: 8
+    n_positions: 256
+
+  # Loss configuration
+  loss: "energy"                 # Optimal transport loss
+  blur: 0.05
+  predict_residual: true
+
+data:
+  embed_key: "X_state"           # Use SE-600M baseline embeddings
+  pert_col: "condition"
+  control_pert: "sham"
+  cell_type_key: "cell_types_simple_short"
+  batch_col: "mouse_id"
+  batch_size: 16
+  num_workers: 8
+
+training:
+  max_epochs: 5                  # Fine-tuning epochs
+  learning_rate: 5e-5            # Lower LR for fine-tuning
+  weight_decay: 0.01
+  warmup_steps: 100
+  gradient_clip_val: 1.0
+
+  # Hardware
+  devices: 2
+  strategy: "ddp"
+  precision: "bf16-mixed"
+
+  # Logging
+  log_every_n_steps: 20
+  val_check_interval: 100
+
+output:
+  output_dir: "/home/scumpia-mrl/state_models/st_lora_mhc"
+  experiment_name: "st_lora_mhc_burn_sham"
+  save_top_k: 2
+  monitor: "val_loss"
+  mode: "min"

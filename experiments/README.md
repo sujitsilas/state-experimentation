@@ -3,7 +3,7 @@
 This directory contains all experimental work for the burn/sham wound healing State model project, organized by experiment type.
 
 **Created**: 2026-01-05
-**Last Updated**: 2026-01-05
+**Last Updated**: 2026-01-12
 
 ---
 
@@ -12,7 +12,7 @@ This directory contains all experimental work for the burn/sham wound healing St
 ```
 experiments/
 ├── baseline_analysis/          # Phase 1: Baseline SE-600M embeddings
-├── lora_training/              # Phase 2: LoRA adapter training
+├── st_fine_tuning/            # Phase 2: ST model fine-tuning (LoRA + mHC)
 ├── st_training/                # Phase 3: State Transition model training
 └── velocity_integration/       # Phase 4: RNA velocity integration
 ```
@@ -42,27 +42,34 @@ experiments/
 
 ---
 
-### 2. lora_training/
+### 2. st_fine_tuning/
 
-**Purpose**: Train LoRA adapter to incorporate temporal/condition information into embeddings
+**Purpose**: Fine-tune State Transition model with LoRA adapters and mHC for perturbation prediction
 
 **Contents**:
-- `phase2_lora_multicov_training.ipynb`: LoRA training with multiple covariates
-- `data/`:
-  - `burn_sham_lora_embedded.h5ad`: LoRA-adapted embeddings
+- `st_lora_mhc_experiment.ipynb`: Comprehensive comparison notebook
+- `configs/`:
+  - `lora_config.yaml`: LoRA-only configuration
+  - `lora_mhc_config.yaml`: LoRA + mHC configuration
+- `results/`: Training outputs and comparisons
 
-**Status**: ✅ Complete
+**Status**: 🔄 Ready for Training
 
-**Key Findings**:
-- Cell type accuracy: ~75% (degraded from 96%)
-- Strong temporal/condition separation
-- Mixed cell type clusters
-- **Decision**: Do NOT use LoRA embeddings for ST model (cell type structure critical)
+**Approach**:
+Compare 3 ST model variants:
+1. **ST-Tahoe (Baseline)**: Pretrained model (no fine-tuning)
+2. **ST-LoRA**: Fine-tuned with LoRA adapters (~1-5% parameters)
+3. **ST-LoRA-mHC**: Fine-tuned with LoRA + mHC (manifold-constrained gradients)
 
-**Lessons Learned**:
-- LoRA optimized for wrong objective (temporal signal at cost of cell types)
-- Better to add temporal/condition as ST model covariates
-- Strong temporal signal validates that information is learnable
+**Key Innovation**:
+- **mHC (Manifold-Constrained Hyper-Connections)**: Stabilizes optimal transport loss gradients via Sinkhorn-Knopp projection to doubly stochastic matrices
+- **LoRA**: Parameter-efficient fine-tuning (only adapt attention layers)
+- **Input**: Fixed SE-600M embeddings (from baseline_analysis)
+
+**Expected Outcomes**:
+- LoRA: Parameter efficiency (95%+ frozen)
+- mHC: Training stability (smoother loss curves)
+- Comparison: Best approach for burn/sham perturbation prediction
 
 ---
 
@@ -147,8 +154,12 @@ experiments/
 ### Completed Phases
 
 ```
-Phase 1 (baseline_analysis) → Phase 2 (lora_training)
-                                      ↓ (Decision: Use baseline)
+Phase 1 (baseline_analysis) → SE-600M embeddings (96% cell type accuracy)
+                                      ↓
+                                Phase 2 (st_fine_tuning)
+                                      ├─→ ST-LoRA (LoRA adapters)
+                                      └─→ ST-LoRA-mHC (LoRA + mHC)
+                                      ↓
                                 Phase 3 (st_training)
                                       ↓ (Add velocity)
                                 Phase 4 (velocity_integration)
@@ -158,8 +169,9 @@ Phase 1 (baseline_analysis) → Phase 2 (lora_training)
 
 | Phase | Decision | Rationale |
 |-------|----------|-----------|
-| 1 → 2 | Try LoRA adaptation | Incorporate temporal/condition into embeddings |
-| 2 → 3 | Use baseline (not LoRA) | Cell type structure critical for ST model |
+| 1 → 2 | Fine-tune ST (not SE) | Perturbation prediction is the goal |
+| 2 | Use LoRA + mHC | Parameter efficiency + gradient stability |
+| 2 → 3 | Compare variants | Find best approach for wound healing |
 | 3 → 4 | Add velocity as covariates | Improve temporal predictions without breaking embeddings |
 
 ---
@@ -174,11 +186,12 @@ Phase 1 (baseline_analysis) → Phase 2 (lora_training)
 | `burn_sham_processed.h5ad` | 1.4 GB | Cleaned, annotated | Baseline embedding extraction |
 | `burn_sham_baseline_embedded.h5ad` | 1.9 GB | With SE-600M embeddings | ST training (Phase 3) |
 
-### LoRA Data (in `lora_training/data/`)
+### ST Fine-Tuning Data (in `st_fine_tuning/results/`)
 
-| File | Size | Description | Used By |
-|------|------|-------------|---------|
-| `burn_sham_lora_embedded.h5ad` | 1.9 GB | LoRA-adapted embeddings | Evaluation only (not used for ST) |
+| File | Size | Description | Created By |
+|------|------|-------------|------------|
+| Model checkpoints | Varies | Trained LoRA/mHC models | Training scripts |
+| Predictions | ~500 MB | Model predictions on test set | Evaluation |
 
 ### ST Training Data (in `st_training/data/`)
 

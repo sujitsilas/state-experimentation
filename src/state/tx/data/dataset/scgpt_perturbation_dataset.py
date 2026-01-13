@@ -221,7 +221,7 @@ class scGPTPerturbationDataset(PerturbationDataset):
         if timepoint_id is not None:
             sample["timepoint_ids"] = timepoint_id
 
-        # Add velocity features if available (Phase 4 - Velocity Integration)
+        # Add velocity features if available (Phase 4 - Velocity Integration - LEGACY)
         if self.has_velocity:
             try:
                 velocity_mag = float(self.h5_file["obs/velocity_magnitude"][underlying_idx])
@@ -233,6 +233,19 @@ class scGPTPerturbationDataset(PerturbationDataset):
                 sample["velocity_confidence"] = velocity_conf
             except Exception as e:
                 logger.warning(f"Could not read velocity features for idx {underlying_idx}: {e}")
+
+        # Add velocity latent (advanced alignment loss - Phase 4 Enhanced)
+        if "obsm/velocity_latent" in self.h5_file:
+            try:
+                velocity_latent = self.h5_file["obsm/velocity_latent"][underlying_idx]
+                sample["velocity_latent"] = torch.tensor(velocity_latent, dtype=torch.float32)
+
+                # Also add confidence if available
+                if "obs/velocity_confidence" in self.h5_file:
+                    velocity_conf = float(self.h5_file["obs/velocity_confidence"][underlying_idx])
+                    sample["velocity_confidence"] = velocity_conf
+            except Exception as e:
+                logger.warning(f"Could not read velocity_latent for idx {underlying_idx}: {e}")
 
         if "perturbation_type" in self.__dict__ and self.perturbation_type == "genetic":
             sample["pert_flags"] = torch.tensor(self.pert_flags[pert_name], dtype=torch.long)

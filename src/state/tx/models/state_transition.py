@@ -14,6 +14,8 @@ from .base import PerturbationModel
 from .decoders import FinetuneVCICountsDecoder
 from .decoders_nb import NBDecoder, nb_nll
 from .utils import build_mlp, get_activation_class, get_transformer_backbone, apply_lora
+from .mhc import apply_mhc_to_transformer
+from .velocity_loss import VelocityAlignmentLoss
 
 
 logger = logging.getLogger(__name__)
@@ -209,8 +211,27 @@ class StateTransitionPerturbationModel(PerturbationModel):
             self.timepoint_dim = num_timepoints
             logger.info(f"Added timepoint embedding: {num_timepoints} timepoints × {hidden_dim} dim")
 
-        # Velocity feature encoders (Phase 4 - Velocity Integration)
-        # Continuous scalar → hidden_dim embedding
+        # Velocity Alignment Loss (Advanced - latent space alignment)
+        self.use_velocity_alignment = kwargs.get("use_velocity_alignment", False)
+        self.velocity_lambda = kwargs.get("velocity_lambda", 0.1)  # Direction loss weight
+        self.velocity_mu = kwargs.get("velocity_mu", 0.01)  # Magnitude loss weight
+        self.velocity_warmup_steps = kwargs.get("velocity_warmup_steps", 1000)
+        self.velocity_min_confidence = kwargs.get("velocity_min_confidence", 0.0)
+
+        if self.use_velocity_alignment:
+            self.velocity_loss_fn = VelocityAlignmentLoss(
+                beta=kwargs.get("velocity_beta", 1.0),
+                use_magnitude=kwargs.get("velocity_use_magnitude", True),
+            )
+            logger.info(
+                f"Added velocity alignment loss: "
+                f"λ_dir={self.velocity_lambda}, λ_mag={self.velocity_mu}, "
+                f"warmup={self.velocity_warmup_steps} steps, "
+                f"min_confidence={self.velocity_min_confidence}"
+            )
+
+        # Legacy velocity feature encoders (Phase 4 - Simple scalar features)
+        # NOTE: This is deprecated in favor of velocity alignment loss
         self.use_velocity = kwargs.get("use_velocity_features", False)
 
         if self.use_velocity:
@@ -380,6 +401,21 @@ class StateTransitionPerturbationModel(PerturbationModel):
                 self.transformer_backbone_key,
                 lora_cfg,
             )
+
+        # Optionally apply mHC (manifold-constrained hyper-connections)
+        self.use_mhc = kwargs.get("use_mhc", False)
+        if self.use_mhc:
+            mhc_cfg = kwargs.get("mhc", {})
+            sinkhorn_iters = mhc_cfg.get("sinkhorn_iters", 10)
+            layer_indices = mhc_cfg.get("layer_indices", None)  # None = all layers
+
+            self.transformer_backbone = apply_mhc_to_transformer(
+                self.transformer_backbone,
+                hidden_dim=self.hidden_dim,
+                sinkhorn_iters=sinkhorn_iters,
+                layer_indices=layer_indices,
+            )
+            logger.info(f"Applied mHC to transformer (sinkhorn_iters={sinkhorn_iters})")
 
         # Project from input_dim to hidden_dim for transformer input
         # self.project_to_hidden = nn.Linear(self.input_dim, self.hidden_dim)
@@ -726,6 +762,58 @@ class StateTransitionPerturbationModel(PerturbationModel):
 
             # Add regularization to total loss
             total_loss = total_loss + self.regularization * l1_loss
+
+        # Velocity alignment loss (physics-informed constraint)
+        if self.use_velocity_alignment and "velocity_latent" in batch:
+            # Get velocity data
+            v_z = batch["velocity_latent"]  # [batch_size, latent_dim] or [batch_size*cell_set_len, latent_dim]
+            v_confidence = batch.get("velocity_confidence")
+
+            # Compute state shift predicted by ST model
+            delta_z_st = pred - batch["ctrl_cell_emb"]  # [batch_size*cell_set_len, output_dim]
+
+            # Filter by confidence if specified
+            if v_confidence is not None and self.velocity_min_confidence > 0.0:
+                valid_mask = v_confidence >= self.velocity_min_confidence
+                if valid_mask.sum() > 0:
+                    delta_z_st_filtered = delta_z_st[valid_mask]
+                    v_z_filtered = v_z[valid_mask]
+                    v_confidence_filtered = v_confidence[valid_mask]
+                else:
+                    # No high-confidence velocities, skip this loss
+                    delta_z_st_filtered = None
+            else:
+                delta_z_st_filtered = delta_z_st
+                v_z_filtered = v_z
+                v_confidence_filtered = v_confidence
+
+            # Compute velocity loss
+            if delta_z_st_filtered is not None:
+                vel_loss, vel_loss_dict = self.velocity_loss_fn(
+                    delta_z_st_filtered,
+                    v_z_filtered,
+                    v_confidence_filtered
+                )
+
+                # Warmup schedule: gradually increase velocity loss weight
+                # lambda_t = min(1.0, current_step / warmup_steps)
+                current_step = self.global_step if hasattr(self, 'global_step') else batch_idx
+                lambda_t = min(1.0, current_step / max(1, self.velocity_warmup_steps))
+
+                # Weighted velocity loss
+                weighted_vel_loss = lambda_t * self.velocity_lambda * vel_loss
+
+                # Log individual components
+                self.log("train/velocity_loss", vel_loss)
+                self.log("train/velocity_lambda_t", lambda_t)
+                self.log("train/velocity_loss_weighted", weighted_vel_loss)
+
+                # Log detailed metrics from loss_dict
+                for key, value in vel_loss_dict.items():
+                    self.log(f"train/velocity_{key}", value)
+
+                # Add to total loss
+                total_loss = total_loss + weighted_vel_loss
 
         return total_loss
 
