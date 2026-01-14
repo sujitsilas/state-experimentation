@@ -1,0 +1,49 @@
+# Burn/Sham Wound Healing Dataset Configuration
+# Input: Gene expression (3000 genes from adata.X)
+
+[dataset]
+path = "/home/scumpia-mrl/Desktop/Sujit/Projects/state-experimentation/experiments/baseline_analysis/data/burn_sham_baseline_embedded.h5ad"
+name = "burn_sham_wound_healing"
+description = "Burn vs Sham wound healing scRNA-seq data (Days 10/14/19)"
+
+[metadata]
+# Column names in adata.obs
+pert_col = "condition"              # Perturbation column (Burn vs Sham)
+control_pert = "Sham"               # Control condition
+cell_type_col = "cell_types_simple_short"  # Cell type annotations
+batch_col = "mouse_id"              # Batch/mouse identifier
+timepoint_col = "timepoint"         # Timepoint information (day10/14/19)
+
+[perturbations]
+# Define perturbations
+names = ["Sham", "Burn"]
+types = ["control", "treatment"]
+
+[embedding]
+# Which data to use as input
+source = "X"                        # Use main data matrix (gene expression)
+dim = 3000                          # 3000 genes
+normalization = "scaled"            # Already scaled (mean=0, std≈2)
+
+[splits]
+# Train/validation split
+train_frac = 0.8
+val_frac = 0.2
+seed = 42
+# Split strategy: random or stratified (by cell type)
+strategy = "stratified"
+stratify_by = "cell_types_simple_short"
+
+[cellsets]
+# Cell set configuration for training
+min_cells_per_pert = 50             # Minimum cells per perturbation
+max_set_size = 256                  # Maximum cells per training batch
+sampling_strategy = "random"        # How to sample cell sets
+
+[biological_context]
+# Biological metadata for interpretation
+organism = "mouse"
+tissue = "skin"
+perturbation_type = "burn_injury"
+timepoints = ["day10", "day14", "day19"]
+key_cell_types = ["Mac", "Fib", "EC", "Ker", "Neu"]

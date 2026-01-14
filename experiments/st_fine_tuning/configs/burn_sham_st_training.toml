@@ -1,0 +1,12 @@
+# Burn/Sham ST Training Configuration
+
+# Dataset paths - maps dataset names to their h5ad files
+[datasets]
+burn_sham = "/home/scumpia-mrl/Desktop/Sujit/Projects/state-experimentation/experiments/baseline_analysis/data/burn_sham_baseline_embedded_2000.h5ad"
+
+# Training specifications - all cell types go to training by default
+[training]
+burn_sham = "train"
+
+# Validation split - can optionally specify cell types for validation
+# For now, let the dataloader handle random splits

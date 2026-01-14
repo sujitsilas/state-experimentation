@@ -185,6 +185,10 @@ class StateTransitionPerturbationModel(PerturbationModel):
 
         self.use_basal_projection = kwargs.get("use_basal_projection", True)
 
+        # Store mHC configuration before building networks
+        self.use_mhc = kwargs.get("use_mhc", False)
+        self.mhc_cfg = kwargs.get("mhc", {})
+
         # Build the underlying neural OT network
         self._build_networks(lora_cfg=kwargs.get("lora", None))
 
@@ -403,11 +407,9 @@ class StateTransitionPerturbationModel(PerturbationModel):
             )
 
         # Optionally apply mHC (manifold-constrained hyper-connections)
-        self.use_mhc = kwargs.get("use_mhc", False)
         if self.use_mhc:
-            mhc_cfg = kwargs.get("mhc", {})
-            sinkhorn_iters = mhc_cfg.get("sinkhorn_iters", 10)
-            layer_indices = mhc_cfg.get("layer_indices", None)  # None = all layers
+            sinkhorn_iters = self.mhc_cfg.get("sinkhorn_iters", 10)
+            layer_indices = self.mhc_cfg.get("layer_indices", None)  # None = all layers
 
             self.transformer_backbone = apply_mhc_to_transformer(
                 self.transformer_backbone,
