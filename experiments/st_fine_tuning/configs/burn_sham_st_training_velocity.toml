@@ -1,0 +1,13 @@
+# Burn/Sham ST Training Configuration with Velocity Data
+# Uses burn_sham_with_velocity.h5ad which contains scVelo velocity information
+
+# Dataset paths - maps dataset names to their h5ad files
+[datasets]
+burn_sham = "/home/scumpia-mrl/Desktop/Sujit/Projects/state-experimentation/experiments/baseline_analysis/data/burn_sham_with_velocity.h5ad"
+
+# Training specifications - all cell types go to training by default
+[training]
+burn_sham = "train"
+
+# Validation split - can optionally specify cell types for validation
+# For now, let the dataloader handle random splits

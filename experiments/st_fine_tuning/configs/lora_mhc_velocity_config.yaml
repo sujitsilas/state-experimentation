@@ -1,5 +1,14 @@
-# LoRA + mHC + Velocity Alignment Configuration for ST Model
+# LoRA + LoR2C-mHC + Velocity Alignment Configuration for ST Model
 # Most sophisticated approach: parameter efficiency + gradient stability + physics constraint
+#
+# This configuration combines three techniques:
+# 1. LoRA: Parameter-efficient fine-tuning of attention weights
+# 2. LoR2C-mHC: Low-rank residual connections with doubly stochastic constraint
+# 3. Velocity Alignment: Physics-informed loss using RNA velocity from scVelo
+#
+# References:
+# - LoR2C paper: https://arxiv.org/abs/2503.00572
+# - mHC paper: https://arxiv.org/abs/2512.24880 (DeepSeek)
 
 model:
   name: "ST-LoRA-mHC-Velocity"
@@ -16,11 +25,16 @@ model:
     bias: "none"
     task_type: "FEATURE_EXTRACTION"
 
-  # mHC Configuration (gradient stabilization)
-  use_mhc: true
-  mhc:
-    sinkhorn_iters: 10           # Sinkhorn-Knopp iterations for doubly stochastic projection
-    layer_indices: null          # null = apply to all transformer layers
+  # LoR2C-mHC Configuration (PEFT-compatible gradient stabilization)
+  # NOTE: use_mhc is deprecated, use use_lor2c_mhc instead
+  use_mhc: false
+  use_lor2c_mhc: true
+  lor2c_mhc:
+    rank: 16                     # Low-rank dimension (r << hidden_dim)
+    sinkhorn_iters: 20           # Sinkhorn-Knopp iterations for doubly stochastic projection
+    alpha: 32.0                  # Scaling factor (like LoRA alpha)
+    share_A: false               # If true, share A matrix across layers (ShareLoR2C variant)
+    dropout: 0.0                 # Dropout on residual path
 
   # Velocity Alignment Configuration (physics-informed loss)
   use_velocity_alignment: true
@@ -29,21 +43,21 @@ model:
   velocity_beta: 1.0             # Scaling factor for velocity magnitude
   velocity_use_magnitude: true   # Include magnitude matching loss
   velocity_warmup_steps: 1000    # Gradual ramp-up of velocity loss
-  velocity_min_confidence: 0.3   # Filter cells with low velocity confidence
+  velocity_min_confidence: 0.0   # Filter cells with low velocity confidence (0 = use all)
 
   # Model architecture
-  input_dim: 2048                # SE-600M embedding dimension
-  output_dim: 2048
-  hidden_dim: 512
-  cell_set_len: 256
+  input_dim: 2000                # State embedding dimension (X_state_2000)
+  output_dim: 2000
+  hidden_dim: 328
+  cell_set_len: 512
 
   # Transformer backbone
   transformer_backbone_key: "GPT2"
   transformer_backbone_kwargs:
-    n_embd: 512
+    n_embd: 328
     n_layer: 8
     n_head: 8
-    n_positions: 256
+    n_positions: 512
 
   # Loss configuration
   loss: "energy"                 # Optimal transport loss (energy distance)
@@ -51,36 +65,31 @@ model:
   predict_residual: true         # Predict Δz rather than absolute z
 
 data:
-  # Data file with velocity_latent
-  # NOTE: Use dataset prepared with prepare_velocity_data.ipynb
+  # Data file with velocity_latent computed by prepare_velocity_data.py
   data_path: "../baseline_analysis/data/burn_sham_with_velocity.h5ad"
 
-  embed_key: "X_state"           # Use SE-600M baseline embeddings
-  velocity_latent_key: "velocity_latent"  # Velocity in SE-latent space
+  embed_key: "X_state_2000"           # State embeddings
+  velocity_latent_key: "velocity_latent"  # Velocity in State latent space
 
   pert_col: "condition"
-  control_pert: "sham"
+  control_pert: "Sham"
   cell_type_key: "cell_types_simple_short"
   batch_col: "mouse_id"
 
-  batch_size: 16
-  num_workers: 8
+  batch_size: 8
+  num_workers: 0
 
 training:
-  max_epochs: 5                  # Fine-tuning epochs
+  max_steps: 5000
   learning_rate: 5e-5            # Lower LR for fine-tuning
-  weight_decay: 0.01
+  weight_decay: 0.0005
   warmup_steps: 100
-  gradient_clip_val: 1.0
+  gradient_clip_val: 10
+  val_freq: 500
 
   # Hardware
-  devices: 2
-  strategy: "ddp"
-  precision: "bf16-mixed"
-
-  # Logging
-  log_every_n_steps: 20
-  val_check_interval: 100
+  devices: 1
+  strategy: "auto"
 
 output:
   output_dir: "/home/scumpia-mrl/state_models/st_lora_mhc_velocity"
@@ -99,11 +108,13 @@ output:
 # 3. Velocity magnitude loss: L_vel_mag = |‖Δz_ST‖ - β‖v_z‖|
 #    Encourages biologically plausible step sizes
 #
-# 4. Confidence filtering: Only use cells with velocity_confidence >= 0.3
-#    Removes noisy velocity estimates
+# 4. Confidence filtering: Only use cells with velocity_confidence >= min_confidence
+#    Set to 0 to use all cells, or increase to filter out noisy velocity estimates
 #
 # 5. Warmup: Velocity loss gradually increases over first 1000 steps
 #    Prevents velocity from dominating early training
 #
-# 6. mHC: Stabilizes gradients from multi-loss training
+# 6. LoR2C-mHC: Stabilizes gradients from multi-loss training
 #    Crucial for combining OT loss + velocity loss successfully
+#
+# PREREQUISITE: Run prepare_velocity_data.py first!

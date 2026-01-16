@@ -14,7 +14,7 @@ from .base import PerturbationModel
 from .decoders import FinetuneVCICountsDecoder
 from .decoders_nb import NBDecoder, nb_nll
 from .utils import build_mlp, get_activation_class, get_transformer_backbone, apply_lora
-from .mhc import apply_mhc_to_transformer
+from .lor2c_mhc import create_lor2c_mhc_adapter, LoR2CmHCAdapter
 from .velocity_loss import VelocityAlignmentLoss
 
 
@@ -188,6 +188,10 @@ class StateTransitionPerturbationModel(PerturbationModel):
         # Store mHC configuration before building networks
         self.use_mhc = kwargs.get("use_mhc", False)
         self.mhc_cfg = kwargs.get("mhc", {})
+
+        # Store LoR2C-mHC configuration (new approach - compatible with LoRA)
+        self.use_lor2c_mhc = kwargs.get("use_lor2c_mhc", False)
+        self.lor2c_mhc_cfg = kwargs.get("lor2c_mhc", {})
 
         # Build the underlying neural OT network
         self._build_networks(lora_cfg=kwargs.get("lora", None))
@@ -406,18 +410,35 @@ class StateTransitionPerturbationModel(PerturbationModel):
                 lora_cfg,
             )
 
-        # Optionally apply mHC (manifold-constrained hyper-connections)
+        # NOTE: Old mHC layer-wrapping approach removed - incompatible with PEFT/LoRA
+        # use_mhc flag is deprecated, use use_lor2c_mhc instead
         if self.use_mhc:
-            sinkhorn_iters = self.mhc_cfg.get("sinkhorn_iters", 10)
-            layer_indices = self.mhc_cfg.get("layer_indices", None)  # None = all layers
-
-            self.transformer_backbone = apply_mhc_to_transformer(
-                self.transformer_backbone,
-                hidden_dim=self.hidden_dim,
-                sinkhorn_iters=sinkhorn_iters,
-                layer_indices=layer_indices,
+            logger.warning(
+                "use_mhc=True is deprecated and has no effect. "
+                "Use use_lor2c_mhc=True instead for PEFT-compatible manifold constraints."
             )
-            logger.info(f"Applied mHC to transformer (sinkhorn_iters={sinkhorn_iters})")
+
+        # Optionally create LoR2C-mHC adapter (works WITH LoRA, not by wrapping layers)
+        self.lor2c_mhc_adapter: Optional[LoR2CmHCAdapter] = None
+        if self.use_lor2c_mhc:
+            # Get number of layers from transformer backbone
+            if hasattr(self.transformer_backbone, 'config'):
+                num_layers = self.transformer_backbone.config.num_hidden_layers
+            else:
+                num_layers = self.transformer_backbone_kwargs.get("n_layer", 8)
+
+            self.lor2c_mhc_adapter = create_lor2c_mhc_adapter(
+                num_layers=num_layers,
+                hidden_dim=self.hidden_dim,
+                rank=self.lor2c_mhc_cfg.get("rank", 16),
+                sinkhorn_iters=self.lor2c_mhc_cfg.get("sinkhorn_iters", 20),
+                alpha=self.lor2c_mhc_cfg.get("alpha", 32.0),
+                share_A=self.lor2c_mhc_cfg.get("share_A", False),
+                dropout=self.lor2c_mhc_cfg.get("dropout", 0.0),
+            )
+            logger.info(
+                f"Created LoR2C-mHC adapter: {self.lor2c_mhc_adapter.get_param_count():,} trainable params"
+            )
 
         # Project from input_dim to hidden_dim for transformer input
         # self.project_to_hidden = nn.Linear(self.input_dim, self.hidden_dim)
@@ -567,6 +588,18 @@ class StateTransitionPerturbationModel(PerturbationModel):
         else:
             outputs = self.transformer_backbone(inputs_embeds=seq_input)
             transformer_output = outputs.last_hidden_state
+
+        # Apply LoR2C-mHC residual if enabled (adds constrained residual connections)
+        if self.lor2c_mhc_adapter is not None:
+            # Apply LoR2C-mHC residual: adds h @ W_res where W_res is low-rank doubly stochastic
+            # We apply a single global residual rather than per-layer (simpler, still effective)
+            # Use the last layer's residual (layer index = num_layers - 1)
+            num_layers = self.lor2c_mhc_adapter.num_layers
+            lor2c_residual = self.lor2c_mhc_adapter.get_layer_residual(
+                layer_idx=num_layers - 1,
+                hidden_states=seq_input,
+            )
+            transformer_output = transformer_output + lor2c_residual
 
         # Extract outputs accounting for optional prepended batch token and optional confidence token at the end
         if self.confidence_token is not None and self.use_batch_token and self.batch_token is not None:
