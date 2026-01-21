@@ -410,20 +410,4 @@ If successful:
 
 ---
 
-## Contact
-
-**Implementation**: Claude (Anthropic)
-**Project**: Philip Scumpia Lab
-**Date**: January 2026
-
-For questions about:
-- **Theory**: See mHC paper + RNA velocity references
-- **Implementation**: Check code comments in velocity_loss.py
-- **Training**: Monitor TensorBoard metrics
-- **Biology**: Validate against known wound healing dynamics
-
----
-
-**Status**: ✅ Ready for training! All code implemented and tested.
-**Recommendation**: Start with ST-LoRA-mHC-Velocity for best results.
 
