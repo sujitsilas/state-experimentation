@@ -222,24 +222,6 @@ Currently empty - training generates checkpoints in `/home/scumpia-mrl/state_mod
 
 ---
 
-## .gitignore Rules
-
-The following are excluded from version control:
-
-```gitignore
-velocyto_loom/          # Large binary .loom files
-experiments/*/data/     # All data files (too large)
-experiments/*/results/  # Generated outputs
-*.h5ad                  # AnnData files (global rule)
-```
-
-**What IS tracked**:
-- Jupyter notebooks (`.ipynb`)
-- Configuration files (`.yaml`, `.toml`)
-- Code modifications (`src/`)
-- Documentation (`.md`)
-
----
 
 ## Computational Resources
 
@@ -249,91 +231,7 @@ experiments/*/results/  # Generated outputs
 - **Strategy**: DDP (Distributed Data Parallel)
 - **CPUs**: 12 cores for scVelo dynamics
 
-### Training Times
 
-| Experiment | Duration | Hardware |
-|------------|----------|----------|
-| Baseline embedding extraction | ~30 min | Single GPU |
-| LoRA training | 4-6 hours | 2× GPU (DDP) |
-| ST training (Phase 3) | 4-6 hours | 2× GPU (DDP) |
-| ST training (Phase 4, with velocity) | 4-6 hours | 2× GPU (DDP) |
-| scVelo dynamics computation | 10-15 min | 12 CPUs |
-
----
-
-## Next Steps
-
-### Immediate (Phase 4)
-
-1. **Run data processing notebooks**:
-   ```bash
-   jupyter notebook experiments/velocity_integration/notebooks/step0_load_velocyto_data.ipynb
-   jupyter notebook experiments/velocity_integration/notebooks/step1_compute_velocity_features.ipynb
-   ```
-
-2. **Create training configuration**:
-   - Copy from `configs/state_transition_burn_sham.yaml`
-   - Add `use_velocity_features: true`
-   - Save to `experiments/velocity_integration/configs/st_with_velocity.yaml`
-
-3. **Train model**:
-   ```bash
-   state tx train model.kwargs.use_velocity_features=true [...]
-   ```
-
-4. **Evaluate and compare** to Phase 3 baseline
-
-### Future Directions
-
-If Phase 4 velocity integration is successful:
-- Gene-level velocity integration (1-2 weeks)
-- Velocity matrix encoder (attention over genes)
-- Cell-type-specific velocity patterns
-
-If Phase 4 shows no improvement:
-- Cell cycle scoring (S/G2M phases)
-- Wound healing gene module signatures
-- Trajectory pseudotime (Palantir)
-
----
-
-## Documentation
-
-### Phase Summaries
-
-- **Phase 3**: [/PHASE3_SUMMARY.md](../PHASE3_SUMMARY.md)
-- **Phase 4**: [/PHASE4_VELOCITY_INTEGRATION.md](../PHASE4_VELOCITY_INTEGRATION.md)
-
-### Implementation Plans
-
-- **Velocity Integration**: [/.claude/plans/vast-herding-lamport.md](../.claude/plans/vast-herding-lamport.md)
-
-### Project Guide
-
-- **Overall Plan**: [/CLAUDE.md](../CLAUDE.md) (in `.gitignore`)
-
----
-
-## Quick Reference
-
-### Common Commands
-
-```bash
-# Start Jupyter
-jupyter notebook experiments/
-
-# Train ST model (Phase 3)
-state tx train data.kwargs.embed_key=X_state model.kwargs.use_timepoint_embedding=true [...]
-
-# Train ST model (Phase 4, with velocity)
-state tx train data.kwargs.embed_key=X_state model.kwargs.use_velocity_features=true [...]
-
-# Monitor training
-tensorboard --logdir=/home/scumpia-mrl/state_models/
-
-# Check data files
-ls -lh experiments/*/data/
-```
 
 ### File Paths
 
@@ -352,15 +250,4 @@ ls -lh experiments/*/data/
 
 **Project Owner**: Sujit
 **Created**: 2026-01-05
-**Purpose**: PhD Qualifying Exam (3-month timeline)
 
-**Notes**:
-- All phases build on each other sequentially
-- Each phase has independent notebooks for reproducibility
-- Data files are large (~1-2 GB each) and excluded from git
-- Training requires 2× RTX 5000 Ada GPUs
-- Total compute time: ~25-30 hours across all phases
-
----
-
-**For detailed implementation information, see the phase-specific documentation linked above.**
